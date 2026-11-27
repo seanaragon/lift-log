@@ -31,7 +31,24 @@
 :root[data-theme="dark"]{
   --bg:#0f1215; --surface:#181c21; --sunk:#12161a; --ink:#eef1f4; --muted:#8d97a3; --line:#2a3038;
   --accent:#ff7a3d; --accent-ink:#1a0d05; --accent-soft:#3a2216; --good:#43c47a; --good-soft:#163323; --bad:#ef6a6a; --bad-soft:#3a1c1c; color-scheme:dark}
+/* in-app theme choice (Settings → Theme) overrides the system setting */
+:root:root[data-app-theme="light"]{
+  --bg:#eef1f4; --surface:#ffffff; --sunk:#e4e8ed; --ink:#14181d; --muted:#5d6773; --line:#d3d9e0;
+  --accent:#d9521a; --accent-ink:#ffffff; --accent-soft:#fbe3d7; --good:#1d8549; --good-soft:#d8f0e2; --bad:#c03636; --bad-soft:#f7dcdc; color-scheme:light}
+:root:root[data-app-theme="dark"]{
+  --bg:#0f1215; --surface:#181c21; --sunk:#12161a; --ink:#eef1f4; --muted:#8d97a3; --line:#2a3038;
+  --accent:#ff7a3d; --accent-ink:#1a0d05; --accent-soft:#3a2216; --good:#43c47a; --good-soft:#163323; --bad:#ef6a6a; --bad-soft:#3a1c1c; color-scheme:dark}
+:root:root[data-app-theme="black"]{
+  --bg:#000000; --surface:#0e0f11; --sunk:#050506; --ink:#f2f4f6; --muted:#8a929c; --line:#23272d;
+  --accent:#ff7a3d; --accent-ink:#1a0d05; --accent-soft:#33190c; --good:#43c47a; --good-soft:#0f2a1a; --bad:#ef6a6a; --bad-soft:#331616; color-scheme:dark}
 *{box-sizing:border-box}
+.theme-btn{width:36px;height:36px;border:1px solid var(--line);background:var(--surface);border-radius:50%;display:grid;place-items:center;color:var(--ink);padding:0;flex:none}
+.theme-btn svg{width:18px;height:18px}
+.swatches{display:flex;flex-wrap:wrap;gap:10px}
+.sw{width:40px;height:40px;border-radius:50%;border:3px solid var(--surface);box-shadow:0 0 0 1px var(--line);padding:0}
+.sw[aria-pressed="true"]{box-shadow:0 0 0 2px var(--ink)}
+.picker{display:flex;align-items:center;gap:10px}
+.picker input[type=color]{width:52px;height:40px;border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:3px}
 body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45;-webkit-tap-highlight-color:transparent}
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
 button,input,select{font:inherit;color:inherit}
@@ -154,6 +171,7 @@ nav.tabs button[aria-current="page"]{color:var(--accent)}
 <body>
 <header class="top"><div class="wrap">
   <div class="brand">Lift<span>/</span>Log</div>
+  <button class="theme-btn" data-act="theme" aria-label="Theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.5-.2-.8-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4-4-7.4-9-7.4z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/></svg></button>
   <div class="seg" role="group" aria-label="Weight unit">
     <button id="u-kg" data-act="unit" data-v="kg">kg</button><button id="u-lb" data-act="unit" data-v="lb">lb</button>
   </div>
@@ -207,7 +225,7 @@ function planFor(dayId,name){
 const BASE_LIB=['Back Squat','Deadlift','Bench Press','Leg Press','Bulgarian Split Squat','Face Pull','Hammer Curl','Pull-up','Seated Cable Row','Cable Crunch'];
 const libNames=()=>[...new Set(daysList().flatMap(d=>d.ex.map(e=>e.name)).concat(BASE_LIB))];
 
-let S={workouts:[],unit:'kg',unitSet:false,rest:180,restSet:false,split:null,splitAt:0};
+let S={workouts:[],unit:'kg',unitSet:false,rest:180,restSet:false,theme:{mode:'system',accent:'',at:0},split:null,splitAt:0};
 let tab='train', openHist=null, progEx=null;
 let db=null, coll=null, syncState='local';
 const dirty=new Set(), timers={}, writing={};
@@ -222,6 +240,7 @@ const $=id=>document.getElementById(id);
 function loadLocal(){try{const d=JSON.parse(localStorage.getItem(LS_KEY)||'null');if(d&&Array.isArray(d.workouts))S=Object.assign(S,d);}catch(e){}
   if(!S.unitSet)S.unit='kg';
   if(!S.restSet)S.rest=180;
+  if(!S.theme||typeof S.theme!=='object')S.theme={mode:'system',accent:'',at:0};
   if(!Array.isArray(S.split))S.split=starterSplit();}
 function saveLocal(){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}}
 
@@ -252,21 +271,42 @@ function bestE1(name,beforeTs){
   return b;
 }
 
+/* plan values are a single number ("40"), a range ("15-20"), "F" (reps to failure) or empty */
+function rng(v){const m=String(v??'').trim().match(/^(\d+(?:\.\d+)?)(?:\s*-\s*(\d+(?:\.\d+)?))?$/);if(!m)return null;
+  const a=+m[1],b=m[2]!=null?+m[2]:a;return {lo:Math.min(a,b),hi:Math.max(a,b),range:a!==b};}
+const showR=v=>String(v??'').replace(/-/g,'–');
+function planTxt(p){if(!p)return '';
+  const w=p.w!==''?showR(p.w)+' '+S.unit:'', r=p.r==='F'?'to failure':p.r!==''?showR(p.r)+' reps':'';
+  return w&&r?w+(p.r==='F'?' ':' × ')+r:(w||r);}
+function repRange(plan,reps){
+  const R=plan&&rng(plan.r);
+  if(R&&R.range)return {lo:R.lo,hi:R.hi};
+  if(R)return {lo:R.lo,hi:R.lo+2};
+  if(plan&&plan.r==='F')return {lo:8,hi:12};
+  const lo=Math.max(4,reps||0);return {lo,hi:Math.max(lo+2,8)};
+}
+
 /* progressive overload: double progression.
    Work a rep range; when every set at the top weight reaches the top of the range, add weight and drop back to the bottom. */
 function suggestion(ex,dayId,wid){
   const prev=prevSession(ex.name,null,wid);
   const plan=planFor(dayId,ex.name);
-  if(!prev){return plan&&plan.w!==''?{w:plan.w,r:plan.r==='F'?'':plan.r,text:'Starting point: <b>'+fmtW(+plan.w)+' '+S.unit+(plan.r&&plan.r!=='F'?' × '+plan.r:' to failure')+'</b>'}:null;}
+  if(!prev){
+    if(!plan||(plan.w===''&&plan.r===''))return null;
+    const W=rng(plan.w),R=rng(plan.r);
+    const txt=(W?fmtW(W.lo)+' '+S.unit:'')+(R?(W?' × ':'')+R.lo+' reps':plan.r==='F'?(W?' ':'')+'to failure':'');
+    return txt?{w:W?W.lo:'',r:R?R.lo:'',text:'Starting point: <b>'+txt+'</b>'+(W&&W.range||R&&R.range?' (bottom of your range)':'')}:null;
+  }
   const top=Math.max(...prev.sets.map(s=>+s.w||0));
   const atTop=prev.sets.filter(s=>(+s.w||0)===top);
   const reps=Math.min(...atTop.map(s=>+s.r||0));
   if(!reps)return {w:top,r:'',text:'Last time: <b>'+fmtW(top)+' '+S.unit+'</b>. Log your reps to get a target.'};
-  const pr=plan&&+plan.r>0?+plan.r:null, fail=plan&&plan.r==='F';
-  const lo=pr||(fail?8:Math.max(4,reps)), hi=pr?pr+2:(fail?12:Math.max(lo+2,8));
+  const {lo,hi}=repRange(plan,reps), W=plan&&rng(plan.w);
   const step=S.unit==='kg'?2.5:5;
-  if(reps>=hi){const nw=top+step;return {w:nw,r:lo,text:'You hit '+reps+' reps. Add weight: <b>'+fmtW(nw)+' × '+lo+'</b>'};}
-  return {w:top,r:reps+1,text:'Beat last time: <b>'+fmtW(top)+' × '+(reps+1)+'</b> (one more rep)'};
+  if(reps>=hi){const nw=top+step;
+    const past=W&&W.range&&nw>W.hi?' You’re past your '+showR(plan.w)+' '+S.unit+' range.':'';
+    return {w:nw,r:lo,text:'You hit '+reps+' reps, the top of '+lo+'–'+hi+'. Add weight: <b>'+fmtW(nw)+' × '+lo+'</b>'+past};}
+  return {w:top,r:reps+1,text:'Beat last time: <b>'+fmtW(top)+' × '+(reps+1)+'</b> (aiming for '+lo+'–'+hi+' reps)'};
 }
 
 /* ---------- persistence: local first, db when signed in ---------- */
@@ -289,7 +329,7 @@ async function flush(id){
 let splitTimer=null;
 function saveSplit(){S.splitAt=Date.now();saveLocal();if(!coll)return;clearTimeout(splitTimer);
   splitTimer=setTimeout(()=>{splitTimer=null;coll.doc('split').set({days:JSON.parse(JSON.stringify(S.split)),updatedAt:S.splitAt}).then(()=>setSync('synced')).catch(e=>setSync('error'));},700);}
-function saveSettings(){saveLocal();coll&&coll.doc('settings').set({unit:S.unit,unitSet:S.unitSet,rest:S.rest,restSet:S.restSet}).catch(()=>{});}
+function saveSettings(){saveLocal();coll&&coll.doc('settings').set({unit:S.unit,unitSet:S.unitSet,rest:S.rest,restSet:S.restSet,theme:S.theme}).catch(()=>{});}
 function setSync(s){syncState=s;const el=$('sync');if(el)el.textContent=syncText();}
 function syncText(){return {local:'Saved on this phone · works offline',loading:'Connecting to your account…',synced:'Synced to your Claude account',error:'Sync paused. Your log is still saved on this device.',slow:'Can’t reach your account yet. Saving on this device.',full:'Storage is full. Delete old workouts to keep syncing.'}[syncState]||''}
 
@@ -311,6 +351,7 @@ async function initDb(){
       if(settings){
         if(settings.unitSet&&settings.unit&&settings.unit!==S.unit){S.unit=settings.unit;S.unitSet=true;changed=true;}
         if(settings.restSet&&settings.rest&&settings.rest!==S.rest){S.rest=settings.rest;S.restSet=true;changed=true;}
+        if(settings.theme&&(settings.theme.at||0)>(S.theme.at||0)){S.theme=Object.assign({mode:'system',accent:''},settings.theme);applyTheme();changed=true;}
       }
       if(first){
         first=false;clearTimeout(slow);setSync('synced');
@@ -346,14 +387,14 @@ function newExercise(name,w){
   const prev=prevSession(name,null,w.id), plan=planFor(w.splitId,name);
   let sets;
   if(prev)sets=prev.sets.map(s=>({w:s.w,r:s.r,done:false}));
-  else if(plan)sets=Array.from({length:plan.sets},()=>({w:plan.w===''?'':String(plan.w),r:plan.r==='F'||plan.r===''?'':String(plan.r),done:false}));
+  else if(plan){const W=rng(plan.w),R=rng(plan.r);sets=Array.from({length:plan.sets},()=>({w:W?String(W.lo):'',r:R?String(R.lo):'',done:false}));}
   else sets=[{w:'',r:'',done:false},{w:'',r:'',done:false}];
   if(plan&&prev&&sets.length<plan.sets){const l=sets[sets.length-1];while(sets.length<plan.sets)sets.push({w:l.w,r:l.r,done:false});}
   return {name,sets,note:prev?prev.note:(plan?plan.note:'')};
 }
 function applySugg(w,ei){
   const ex=w.exercises[ei], sg=suggestion(ex,w.splitId,w.id); if(!sg)return;
-  ex.sets.forEach(s=>{if(!s.done){s.w=String(sg.w);if(sg.r!=='')s.r=String(sg.r);}});
+  ex.sets.forEach(s=>{if(!s.done){if(sg.w!=='')s.w=String(sg.w);if(sg.r!=='')s.r=String(sg.r);}});
   touch(w);render();toast('Target filled in');
 }
 function finishWorkout(){
@@ -429,6 +470,7 @@ function renderTrain(){
   }
   w.exercises.forEach((e,ei)=>{
     const prev=prevSession(e.name,null,w.id), sg=suggestion(e,w.splitId,w.id);
+    const plan=planFor(w.splitId,e.name), ptxt=planTxt(plan);
     const done=e.sets.filter(s=>s.done);
     let cmp='';
     if(prev&&done.length){const a=bestOf(done),b=bestOf(prev.sets);const d=a-b;
@@ -436,12 +478,12 @@ function renderTrain(){
     h+='<section class="card"><div class="ex-head"><span class="ord">'+(ei+1)+'</span><h3>'+esc(e.name)+'</h3>'+
       (ei>0?'<button class="icon-btn" data-act="ex-up" data-ei="'+ei+'" aria-label="Move up">↑</button>':'')+
       '<button class="icon-btn" data-act="ex-del" data-ei="'+ei+'" aria-label="Remove '+esc(e.name)+'">✕</button></div>'+
-      '<div class="ex-meta">'+(prev?'<span>Last ('+fmtDate(prev.w.startedAt,{month:'short',day:'numeric'})+'): <span class="num">'+prev.sets.map(setTxt).join(', ')+'</span></span>':'<span>First time logging this lift</span>')+
+      '<div class="ex-meta">'+(ptxt?'<span>Plan: <span class="num">'+plan.sets+(plan.sets>1?' sets':' set')+' · '+esc(ptxt)+'</span></span>':'')+(prev?'<span>Last ('+fmtDate(prev.w.startedAt,{month:'short',day:'numeric'})+'): <span class="num">'+prev.sets.map(setTxt).join(', ')+'</span></span>':'<span>First time logging this lift</span>')+
       (sg?'<div class="sugg"><span>'+sg.text+'</span><button data-act="sugg" data-ei="'+ei+'">Use</button></div>':'')+cmp+'</div>'+
       '<table class="sets"><thead><tr><th>Set</th><th>'+S.unit+'</th><th>Reps</th><th>Done</th></tr></thead><tbody>'+
       e.sets.map((s,si)=>'<tr class="'+(s.done?'done':'')+'"><td class="num muted">'+(si+1)+'</td>'+
         '<td><input id="w'+ei+'_'+si+'" inputmode="decimal" data-act="set" data-f="w" data-ei="'+ei+'" data-si="'+si+'" value="'+esc(s.w)+'" placeholder="0" aria-label="Weight, set '+(si+1)+'"></td>'+
-        '<td><input id="r'+ei+'_'+si+'" inputmode="numeric" data-act="set" data-f="r" data-ei="'+ei+'" data-si="'+si+'" value="'+esc(s.r)+'" placeholder="'+(isFail(w,e)?'fail':'0')+'" aria-label="Reps, set '+(si+1)+'"></td>'+
+        '<td><input id="r'+ei+'_'+si+'" inputmode="numeric" data-act="set" data-f="r" data-ei="'+ei+'" data-si="'+si+'" value="'+esc(s.r)+'" placeholder="'+repPh(w,e)+'" aria-label="Reps, set '+(si+1)+'"></td>'+
         '<td><button class="del-set" data-act="set-del" data-ei="'+ei+'" data-si="'+si+'" aria-label="Delete set '+(si+1)+'">−</button><button class="check" data-act="done" data-ei="'+ei+'" data-si="'+si+'" aria-pressed="'+!!s.done+'" aria-label="Mark set '+(si+1)+' done">✓</button></td></tr>').join('')+
       '</tbody></table><div class="ex-foot"><button class="btn ghost small" data-act="set-add" data-ei="'+ei+'">+ Set</button><input id="note'+ei+'" data-act="note" data-ei="'+ei+'" value="'+esc(e.note||'')+'" placeholder="Note (seat height, grip…)" aria-label="Note for '+esc(e.name)+'"></div></section>';
   });
@@ -454,6 +496,29 @@ function renderTrain(){
   h+='<div class="row"><button class="btn danger" data-act="discard">Discard</button><button class="btn good grow" data-act="finish">Finish workout · '+doneSets(w)+' sets</button></div>';
   return h;
 }
+/* ---------- theme ---------- */
+const ACCENTS=[['','Default orange','#e2642a'],['#3b82f6','Blue'],['#4dafea','Sky'],['#14a3a3','Teal'],['#22a05b','Green'],['#e0a800','Gold'],['#e03a3a','Red'],['#e84a8a','Pink'],['#8b5cf6','Purple']];
+function applyTheme(){
+  const r=document.documentElement, t=S.theme||{};
+  if(t.mode&&t.mode!=='system')r.setAttribute('data-app-theme',t.mode);else r.removeAttribute('data-app-theme');
+  const a=/^#[0-9a-f]{6}$/i.test(t.accent||'')?t.accent:'';
+  if(a){const n=parseInt(a.slice(1),16),R=n>>16,G=n>>8&255,B=n&255,lum=(0.2126*R+0.7152*G+0.0722*B)/255;
+    r.style.setProperty('--accent',a);r.style.setProperty('--accent-ink',lum>0.6?'#111111':'#ffffff');
+    r.style.setProperty('--accent-soft','color-mix(in srgb, '+a+' 20%, var(--surface))');}
+  else ['--accent','--accent-ink','--accent-soft'].forEach(p=>r.style.removeProperty(p));
+  const m=document.querySelector('meta[name="theme-color"]');
+  if(m){try{m.setAttribute('content',getComputedStyle(r).getPropertyValue('--bg').trim()||'#0f1215');}catch(e){}}
+}
+function setTheme(patch){S.theme=Object.assign({},S.theme,patch,{at:Date.now()});applyTheme();saveSettings();}
+function themeSheet(){
+  const t=S.theme, cur=/^#[0-9a-f]{6}$/i.test(t.accent||'')?t.accent:'#e2642a';
+  sheet('<h2>Theme</h2>'+
+    '<div class="label">Mode</div><div class="seg" role="group" aria-label="Theme mode" style="align-self:flex-start">'+[['system','Auto'],['light','Light'],['dark','Dark'],['black','Black']].map(([v,l])=>'<button data-act="theme-mode" data-v="'+v+'" aria-pressed="'+((t.mode||'system')===v)+'">'+l+'</button>').join('')+'</div>'+
+    '<p class="muted" style="margin:0;font-size:12.5px">Auto follows your phone’s light or dark setting. Black is pure black, easy on OLED screens.</p>'+
+    '<div class="label">Accent color</div><div class="swatches">'+ACCENTS.map(([v,l,show])=>'<button class="sw" data-act="theme-accent" data-v="'+v+'" aria-label="'+l+'" aria-pressed="'+((t.accent||'')===v)+'" style="background:'+(show||v)+'"></button>').join('')+'</div>'+
+    '<label class="picker"><input type="color" id="accent-picker" data-act="theme-custom" value="'+cur+'"><span>Pick any color</span></label>'+
+    '<div class="row"><button class="btn ghost grow" data-act="theme-reset">Reset to default</button><button class="btn primary grow" data-act="sheet-close-btn">Done</button></div>');
+}
 const fmtRest=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
 function parseRest(v){v=String(v).trim();if(!v)return null;
   let s;if(v.includes(':')){const [m,sec]=v.split(':');s=(+m||0)*60+(+sec||0);}else{const n=+v.replace(/[^\d.]/g,'');if(!n)return null;s=n<=15?Math.round(n*60):Math.round(n);}
@@ -464,17 +529,17 @@ function datalist(){const names=[...new Set([...S.workouts.flatMap(x=>x.exercise
 /* ---------- split editor ---------- */
 function renderEdit(){
   let h='<div class="row"><h2 class="grow">Edit split</h2><button class="btn ghost small" data-act="import">Paste split</button><button class="btn primary small" data-act="edit-done">Done</button></div>'+
-    '<p class="muted" style="margin:0;font-size:13px">Set each day’s lifts and starting numbers. Reps: a number, or F for to failure. After your first session, each lift fills in from what you actually did, so these numbers are only the starting point. Changes save as you type.</p>';
+    '<p class="muted" style="margin:0;font-size:13px">Set each day’s lifts and starting numbers. Weight and reps can be one number or a range, like 15-20 and 5-8. Reps can also be F for to failure. After your first session, each lift fills in from what you actually did, so these numbers are only the starting point. Changes save as you type.</p>';
   daysList().forEach((d,di)=>{
     h+='<section class="card"><div class="ex-head" style="padding-bottom:10px"><input class="name" style="border:0;background:none;font-family:var(--display);font-size:22px;font-weight:700;text-transform:uppercase;min-width:0;flex:1;padding:0" id="dn'+di+'" data-act="ed-day" data-di="'+di+'" value="'+esc(d.name)+'" placeholder="Day name" aria-label="Day name">'+
       (di>0?'<button class="icon-btn" data-act="ed-day-up" data-di="'+di+'" aria-label="Move day up">↑</button>':'')+
       '<button class="icon-btn" data-act="ed-day-del" data-di="'+di+'" aria-label="Delete day">✕</button></div>'+
-      '<table class="sets"><thead><tr><th>Lift</th><th style="width:48px">Sets</th><th style="width:62px">'+S.unit+'</th><th style="width:52px">Reps</th><th></th></tr></thead><tbody>'+
+      '<table class="sets"><thead><tr><th>Lift</th><th style="width:44px">Sets</th><th style="width:70px">'+S.unit+'</th><th style="width:62px">Reps</th><th></th></tr></thead><tbody>'+
       d.ex.map((e,xi)=>'<tr><td style="width:auto"><input id="en'+di+'_'+xi+'" list="ex-list" data-act="ed-ex" data-f="name" data-di="'+di+'" data-xi="'+xi+'" value="'+esc(e.name)+'" placeholder="Lift name" style="text-align:left;font-family:var(--body);font-size:14px" aria-label="Lift name">'+
         '<input id="eo'+di+'_'+xi+'" data-act="ed-ex" data-f="note" data-di="'+di+'" data-xi="'+xi+'" value="'+esc(e.note||'')+'" placeholder="Note" style="text-align:left;font-family:var(--body);font-size:12px;margin-top:4px;padding:6px 8px;background:none;border-color:var(--line)" aria-label="Note"></td>'+
         '<td><input id="es'+di+'_'+xi+'" inputmode="numeric" data-act="ed-ex" data-f="sets" data-di="'+di+'" data-xi="'+xi+'" value="'+esc(e.sets)+'" aria-label="Sets"></td>'+
-        '<td><input id="ew'+di+'_'+xi+'" inputmode="decimal" data-act="ed-ex" data-f="w" data-di="'+di+'" data-xi="'+xi+'" value="'+esc(e.w)+'" placeholder="–" aria-label="Weight"></td>'+
-        '<td><input id="er'+di+'_'+xi+'" data-act="ed-ex" data-f="r" data-di="'+di+'" data-xi="'+xi+'" value="'+esc(e.r)+'" placeholder="–" aria-label="Reps"></td>'+
+        '<td><input id="ew'+di+'_'+xi+'" data-act="ed-ex" data-f="w" data-di="'+di+'" data-xi="'+xi+'" value="'+esc(e.w)+'" placeholder="–" aria-label="Weight or weight range" style="font-size:14px;padding:9px 3px"></td>'+
+        '<td><input id="er'+di+'_'+xi+'" data-act="ed-ex" data-f="r" data-di="'+di+'" data-xi="'+xi+'" value="'+esc(e.r)+'" placeholder="–" aria-label="Reps or rep range" style="font-size:14px;padding:9px 3px"></td>'+
         '<td style="width:58px;white-space:nowrap">'+(xi>0?'<button class="icon-btn" data-act="ed-ex-up" data-di="'+di+'" data-xi="'+xi+'" aria-label="Move up">↑</button>':'')+'<button class="icon-btn" data-act="ed-ex-del" data-di="'+di+'" data-xi="'+xi+'" aria-label="Remove lift">✕</button></td></tr>').join('')+
       '</tbody></table><div class="ex-foot"><button class="btn ghost small" data-act="ed-ex-add" data-di="'+di+'">+ Add lift</button></div></section>';
   });
@@ -487,7 +552,7 @@ function renderEdit(){
 const titleCase=s=>s.toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase());
 function parseSplit(text){
   const days=[];let cur=null,afterSep=true;
-  const NUM=/^(\d+(?:\.\d+)?)(kg|kgs|lb|lbs)?$/i;
+  const NUM=/^(\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?)(kg|kgs|lb|lbs)?$/i, REPS=/^(\d+(?:-\d+)?)(reps?)$/i;
   text.split(/\r?\n/).forEach(raw=>{
     let line=raw.replace(/\t/g,' ').replace(/^[\s•*\-–·\d]+[.)]\s+/,'').trim();
     if(!line)return;
@@ -503,14 +568,26 @@ function parseSplit(text){
     let sets=1;const sm=line.match(/(\d+)\s*(?:x\s*)?sets?\b/i);
     if(sm){sets=Math.min(20,+sm[1]);line=(line.slice(0,sm.index)+' '+line.slice(sm.index+sm[0].length)).trim();}
     const notes=[];line=line.replace(/\(([^)]*)\)/g,(m,inner,off)=>{return off===0||!/\d/.test(line.slice(0,off))?m:(notes.push(inner),'');});
+    // ranges: "5to8", "5 - 8", "15kg to 20kg" all become "5-8" / "15-20kg"
+    line=line.replace(/(\d+(?:\.\d+)?)\s*(?:kgs?|lbs?)?\s*(?:to|-|–|—|~)\s*(\d+(?:\.\d+)?)/gi,'$1-$2');
     const t=line.split(/\s+/).filter(Boolean);
-    let i=t.findIndex((tok,k)=>k>0&&(NUM.test(tok)||/^f$/i.test(tok)&&k>0));
+    let i=t.findIndex((tok,k)=>k>0&&(NUM.test(tok)||REPS.test(tok)||/^f$/i.test(tok)));
     if(i<0)i=t.length;
-    const name=t.slice(0,i).join(' ');let w='',r='';const rest=t.slice(i);
-    rest.forEach(tok=>{const m=tok.match(NUM);
-      if(m){if(w==='')w=m[1];else if(r==='')r=m[1];else notes.push(tok);}
-      else if(/^f(ail(ure)?)?$/i.test(tok)&&r==='')r='F';
-      else notes.push(tok);});
+    const name=t.slice(0,i).join(' ');let w='',r='',wUnit=false;const rest=t.slice(i);
+    for(let k=0;k<rest.length;k++){const tok=rest[k];
+      if(/^[x×@]$/i.test(tok))continue;
+      let m=tok.match(REPS);
+      if(m){if(r==='')r=m[1];else notes.push(tok);continue;}
+      m=tok.match(NUM);
+      if(m){
+        if(/^reps?$/i.test(rest[k+1]||'')&&r===''){r=m[1];k++;continue;}
+        if(m[2]){if(w===''){w=m[1];wUnit=true;}else if(!wUnit&&r===''){r=w;w=m[1];wUnit=true;}else notes.push(tok);continue;}
+        if(/^(kgs?|lbs?)$/i.test(rest[k+1]||'')){if(w===''){w=m[1];wUnit=true;k++;continue;}if(!wUnit&&r===''){r=w;w=m[1];wUnit=true;k++;continue;}}
+        if(w==='')w=m[1];else if(r==='')r=m[1];else notes.push(tok);
+        continue;}
+      if(/^f(ail(ure)?)?$/i.test(tok)&&r===''){r='F';continue;}
+      if(/^(kgs?|lbs?)$/i.test(tok))continue;
+      notes.push(tok);}
     if(!name)return;
     cur.ex.push({name:name.slice(0,60),sets,w,r,note:notes.join(' ').trim().slice(0,120)});
   });
@@ -519,8 +596,8 @@ function parseSplit(text){
 let imported=[];
 function importSheet(){
   imported=[];
-  sheet('<h2>Paste your split</h2><p class="muted" style="margin:0;font-size:13.5px">Paste it from your notes app. Put each day’s name on its own line, then one lift per line: name, sets, weight, reps. Use F for to failure.</p>'+
-    '<pre class="muted" style="margin:0;font-family:var(--mono);font-size:12px;background:var(--sunk);border-radius:10px;padding:10px;overflow-x:auto">PUSH DAY\nBench Press 2 sets 60 8\nShoulder Press 20 6\nLateral Raises 2 sets 10 f\n\nPULL DAY\nLat Pulldown 2 sets 60 5\n…</pre>'+
+  sheet('<h2>Paste your split</h2><p class="muted" style="margin:0;font-size:13.5px">Paste it from your notes app. Put each day’s name on its own line, then one lift per line: name, sets, weight, reps. Ranges work too, like 15to20kg 5to8 reps. Use F for to failure.</p>'+
+    '<pre class="muted" style="margin:0;font-family:var(--mono);font-size:12px;background:var(--sunk);border-radius:10px;padding:10px;overflow-x:auto">PUSH DAY\nBench Press 2 sets 60 8\nShoulder Press 2 sets 15to20kg 5to8 reps\nLateral Raises 2 sets 10 f\n\nPULL DAY\nLat Pulldown 2 sets 50-60kg 6-10 reps\n…</pre>'+
     '<textarea id="imp-text" data-act="imp" rows="9" placeholder="Paste your split here" style="width:100%;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:12px;font-size:15px;font-family:var(--body);resize:vertical"></textarea>'+
     '<div id="imp-prev" class="muted" style="font-size:13.5px">Nothing pasted yet.</div>'+
     '<div class="row"><button class="btn ghost grow" data-act="sheet-close-btn">Cancel</button><button class="btn ghost grow" data-act="imp-add" id="imp-add" disabled>Add as new days</button><button class="btn primary grow" data-act="imp-replace" id="imp-rep" disabled>Replace my split</button></div>');
@@ -530,9 +607,10 @@ function updateImportPreview(){
   imported=parseSplit($('imp-text').value);
   const n=imported.reduce((a,d)=>a+d.ex.length,0);
   $('imp-prev').innerHTML=imported.length?'<b style="color:var(--ink)">Found '+imported.length+' day'+(imported.length>1?'s':'')+', '+n+' lifts.</b> Check them below, then save. You can fix anything later in Edit split.'+
-    imported.map(d=>'<div style="margin-top:8px"><div class="label" style="color:var(--accent)">'+esc(d.name)+'</div>'+d.ex.map(e=>'<div style="display:flex;gap:8px"><span style="flex:1;min-width:0;color:var(--ink)">'+esc(e.name)+'</span><span class="num">'+e.sets+'×'+(e.w||'–')+(e.w?' '+S.unit:'')+' × '+(e.r||'–')+'</span></div>'+(e.note?'<div style="font-size:12px;padding-left:8px">'+esc(e.note)+'</div>':'')).join('')+'</div>').join(''):'No lifts found yet. Put each lift on its own line.';
+    imported.map(d=>'<div style="margin-top:8px"><div class="label" style="color:var(--accent)">'+esc(d.name)+'</div>'+d.ex.map(e=>'<div style="display:flex;gap:8px"><span style="flex:1;min-width:0;color:var(--ink)">'+esc(e.name)+'</span><span class="num">'+e.sets+'×'+(e.w?esc(showR(e.w))+' '+S.unit:'–')+' × '+(e.r?esc(showR(e.r)):'–')+'</span></div>'+(e.note?'<div style="font-size:12px;padding-left:8px">'+esc(e.note)+'</div>':'')).join('')+'</div>').join(''):'No lifts found yet. Put each lift on its own line.';
   $('imp-add').disabled=$('imp-rep').disabled=!imported.length;
 }
+function repPh(w,e){const p=planFor(w.splitId,e.name);if(p&&p.r==='F')return 'fail';const R=p&&rng(p.r);return R&&R.range?R.lo+'–'+R.hi:'0';}
 function isFail(w,e){const p=planFor(w.splitId,e.name);return p&&p.r==='F';}
 
 function renderHistory(){
@@ -651,6 +729,10 @@ document.addEventListener('click',ev=>{
     case 'import':importSheet();break;
     case 'export':exportBackup();break;
     case 'import-file':{const i=$('restore-input');i&&i.click();break;}
+    case 'theme':themeSheet();break;
+    case 'theme-mode':setTheme({mode:v});themeSheet();break;
+    case 'theme-accent':setTheme({accent:v});themeSheet();break;
+    case 'theme-reset':setTheme({mode:'system',accent:''});themeSheet();toast('Theme reset');break;
     case 'load-day':{const d=daysList()[+v];if(!w||!d)break;w.name=d.name;w.splitId=d.id;
       d.ex.filter(e=>e.name.trim()).forEach(e=>w.exercises.push(newExercise(e.name.trim(),w)));touch(w);render();window.scrollTo(0,0);break;}
     case 'imp-add':case 'imp-replace':{if(!imported.length)break;
@@ -691,11 +773,12 @@ document.addEventListener('input',ev=>{
   else if(act==='wname'&&w){w.name=el.value.slice(0,60)||'Workout';touch(w);}
   else if(act==='note'&&w){w.exercises[+el.dataset.ei].note=el.value.slice(0,120);touch(w);}
   else if(act==='imp'){updateImportPreview();}
+  else if(act==='theme-custom'){S.theme=Object.assign({},S.theme,{accent:el.value});applyTheme();}
   else if(act==='ed-day'){S.split[+el.dataset.di].name=el.value.slice(0,40);saveSplit();}
   else if(act==='ed-ex'){const e=S.split[+el.dataset.di].ex[+el.dataset.xi],f=el.dataset.f;let val=el.value;
     if(f==='sets')val=val.replace(/\D/g,'').slice(0,2);
-    else if(f==='w')val=val.replace(',','.').replace(/[^\d.]/g,'');
-    else if(f==='r')val=/^f/i.test(val)?'F':val.replace(/\D/g,'').slice(0,3);
+    else if(f==='w')val=val.replace(/,/g,'.').replace(/\s*(?:to|–|—|~)\s*/gi,'-').replace(/[^\d.\-]/g,'').slice(0,11);
+    else if(f==='r')val=/^f/i.test(val)?'F':val.replace(/\s*(?:to|–|—|~)\s*/gi,'-').replace(/[^\d\-]/g,'').slice(0,7);
     else val=val.slice(f==='name'?0:0,f==='name'?60:120);
     if(val!==el.value)el.value=val;
     e[f]=f==='sets'?(val===''?'':Math.min(20,+val)):val;saveSplit();}
@@ -703,6 +786,7 @@ document.addEventListener('input',ev=>{
 document.addEventListener('change',ev=>{
   const el=ev.target, act=el.dataset&&el.dataset.act;
   if(act==='prog'){progEx=el.value;render();return;}
+  if(act==='theme-custom'){setTheme({accent:el.value});themeSheet();return;}
   if(act==='rest-custom'){const s=parseRest(el.value);if(s==null){el.value=fmtRest(S.rest);toast('Type a time like 3:00');return;}
     S.rest=s;S.restSet=true;saveSettings();el.value=fmtRest(s);pendingRender=true;toast('Rest set to '+fmtRest(s));return;}
   if(act==='w-start'||act==='h-start'||act==='h-end'){
@@ -715,7 +799,7 @@ document.addEventListener('change',ev=>{
 });
 document.addEventListener('change',ev=>{if(ev.target.id==='restore-input'&&ev.target.files[0])restoreBackup(ev.target.files[0]);});
 async function exportBackup(){
-  const data=JSON.stringify({app:'lift-log',version:1,exportedAt:Date.now(),unit:S.unit,unitSet:S.unitSet,rest:S.rest,split:S.split,workouts:finished().concat(active()?[active()]:[])},null,1);
+  const data=JSON.stringify({app:'lift-log',version:1,exportedAt:Date.now(),unit:S.unit,unitSet:S.unitSet,rest:S.rest,restSet:S.restSet,theme:S.theme,split:S.split,workouts:finished().concat(active()?[active()]:[])},null,1);
   const d=new Date(),p=n=>String(n).padStart(2,'0');
   const name='lift-log-backup-'+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'.json';
   let ok=false;
@@ -733,7 +817,8 @@ function restoreBackup(file){
     S.workouts=Object.values(byId);
     if(Array.isArray(d.split)&&d.split.length)S.split=d.split;
     if(d.unitSet){S.unit=d.unit;S.unitSet=true;}
-    if(d.rest)S.rest=d.rest;
+    if(d.rest){S.rest=d.rest;S.restSet=true;}
+    if(d.theme&&typeof d.theme==='object'){S.theme=d.theme;applyTheme();}
     saveLocal();closeSheet();render();toast('Restored · '+added+' workouts added');};
   r.readAsText(file);
 }
@@ -741,9 +826,15 @@ document.addEventListener('focusin',ev=>{if(ev.target.dataset&&ev.target.dataset
 setInterval(()=>{if(tab==='train'&&active()){const a=document.activeElement;if(!(a&&a.tagName==='INPUT'))render();}},60000);
 
 loadLocal();
+applyTheme();
 render();
 if(active())requestWake();
-if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{});});}
+if('serviceWorker' in navigator){
+  // a new version took over while the app was open: reload into it, unless a workout is in progress
+  const hadCtl=!!navigator.serviceWorker.controller;let swapped=false;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!hadCtl||swapped)return;swapped=true;
+    if(active())toast('App updated. The new version loads next time you open it.');else location.reload();});
+  window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{});});}
 try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist();}catch(e){}
 })();
 </script>
